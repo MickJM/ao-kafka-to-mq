@@ -1,5 +1,6 @@
 package maersk.com.kafka.mq;
 
+import java.io.IOException;
 import java.util.Hashtable;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -10,9 +11,12 @@ import org.apache.log4j.Logger;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.DependsOn;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import com.ibm.mq.MQException;
+import com.ibm.mq.MQMessage;
+import com.ibm.mq.MQPutMessageOptions;
 import com.ibm.mq.MQQueue;
 import com.ibm.mq.MQQueueManager;
 import com.ibm.mq.constants.MQConstants;
@@ -69,10 +73,75 @@ public class MQConnection {
 
 	
 	private MQQueueManager queManager;
+	private boolean needToReconnect = true;
 	
+	private boolean needToConnect = true;
 	
-	@Bean("queuemanager")
-	private MQQueueManager CreateQueueManagerConnection() throws MQException, MQDataException {
+	/*
+	@Scheduled(fixedDelayString="10000")
+    public void Scheduler() {
+
+		log.info("Attempting to creating MQ Queue Manager Object");
+		
+		if (this.queManager != null) {
+			try {
+				if (!this.queManager.isConnected()) {
+					CreateQueueManagerConnection();
+					MQQueue queue = queManager.accessQueue("KAFKA.IN",MQConstants.MQOO_OUTPUT);
+					MQMessage newmsg = new MQMessage();	
+				    String message = "This is a test message";
+					newmsg.write(message.getBytes());
+
+					newmsg.format  		= MQConstants.MQFMT_STRING;
+					newmsg.messageId 		= MQConstants.MQMI_NONE;
+					newmsg.correlationId 	= MQConstants.MQCI_NONE;
+					newmsg.messageType      = MQConstants.MQMT_DATAGRAM;
+
+					MQPutMessageOptions pmo = new MQPutMessageOptions();	
+					queue.put(newmsg, pmo);
+
+				}
+				
+			} catch (MQException e) {
+				log.info("MQException unable to connect to queue manager");
+
+			} catch (MQDataException e) {
+				log.info("MQDataException unable to connect to queue manager");
+			
+			} catch (IOException e) {
+				// TODO Auto-generated catch block
+				e.printStackTrace();
+			}
+			
+		}
+	}
+	*/
+	
+	public MQConnection() {
+		log.info("MQConnection ******** Thread name : " + Thread.currentThread().getName());
+	}
+	
+	public void reconnect() throws MQException, MQDataException {
+		
+		//if (!this.queManager.isConnected()) {
+		this.queManager = null;
+		this.queManager = CreateQueueManagerConnection();
+		//}
+		setNeedToConnect(false);
+		
+		setNeedToReconnect(false);
+		
+		//return this.queManager;
+		
+	}
+	
+	@Bean("queuemanager") 
+	public MQQueueManager CreateQueueManagerConnection() throws MQException, MQDataException {
+		
+		//if (getNeedToConnect()) {
+			//setNeedToConnect(false);
+		//	return null;
+		//}
 		
 		GetEnvironmentVariables();
 		
@@ -80,6 +149,7 @@ public class MQConnection {
 		env.put(MQConstants.HOST_NAME_PROPERTY, this.hostName);
 		env.put(MQConstants.CHANNEL_PROPERTY, this.channel);
 		env.put(MQConstants.PORT_PROPERTY, this.port);
+		env.put(MQConstants.CONNECT_OPTIONS_PROPERTY, MQConstants.MQCNO_RECONNECT);
 		
 		/*
 		 * 
@@ -139,17 +209,23 @@ public class MQConnection {
 		this.queManager = new MQQueueManager(this.queueManager, env);
 		log.info("Connection to queue manager established ");
 		
+		//setNeedToReconnect(false);
+		
 		return queManager;
 	}
 	
-	@Bean
+	@Bean 
 	@DependsOn("queuemanager")
 	public MQQueue OpenQueueForWriting() {
+		
+		if (this.queManager == null) {
+			log.info("this.queManager is null"); 
+			return null;
+		}
 		
 		if (this._debug) { log.info("Opening queue " + destQueue + " for writing"); }
 		
 		MQQueue outQueue = null;
-		
 		int openOptions = MQConstants.MQOO_FAIL_IF_QUIESCING 
 					+ MQConstants.MQOO_OUTPUT ;
 
@@ -208,6 +284,10 @@ public class MQConnection {
 	
 	}
 	
+	public MQQueueManager getQueueManager() {
+		return this.queManager;
+	}
+	
     @PreDestroy
     public void CloseQMConnection() {
     	
@@ -223,6 +303,19 @@ public class MQConnection {
     		// do nothing
     	}
     }
-	
+
+	public synchronized boolean needToReconnect() {
+		return this.needToReconnect;
+	}
+	public synchronized void setNeedToReconnect(boolean val) {
+		this.needToReconnect = val;
+	}
+
+	public synchronized boolean getNeedToConnect() {
+		return this.needToConnect;
+	}
+	public synchronized void setNeedToConnect(boolean val) {
+		this.needToConnect = val;
+	}
 	
 }

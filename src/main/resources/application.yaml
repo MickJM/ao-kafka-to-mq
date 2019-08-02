@@ -30,6 +30,15 @@ ibm:
     user: 
     password: 
     queue: KAFKA.IN
+    mqmd:
+      rfh2: 
+        include: false
+      expiry: 600
+      messageType:
+# reqType ; 1 = REQUEST, 8 = DATAGRAM
+        reqType: 1
+        replyToQM: 
+        replyToQueue: MICK.OUT
     security:
       truststore: C:\ProgramData\IBM\MQ\qmgrs\QMAP01\ssl\qmap01jks.jks
       truststore-password: Passw0rd
