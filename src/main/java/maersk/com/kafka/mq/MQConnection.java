@@ -70,11 +70,10 @@ public class MQConnection {
 	private String keystore;
 	@Value("${ibm.mq.security.keystore-password}")
 	private String keystorepass;
-
 	
 	private MQQueueManager queManager;
+
 	private boolean needToReconnect = true;
-	
 	private boolean needToConnect = true;
 	
 	/*

@@ -43,8 +43,6 @@ public class KafkaConsumer {
     public void listen(ConsumerRecord<?,?> consumerRecord, Acknowledgment ack) {
 
 		log.info("Attempting to write message ...");
-		log.info("Thread name ... " + java.lang.Thread.currentThread().getName());
-
 		
 		if (this.mqproducer != null) {
 			log.info("Kafka Listener .... MQProducer exists");
