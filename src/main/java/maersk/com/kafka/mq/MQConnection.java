@@ -1,12 +1,15 @@
 package maersk.com.kafka.mq;
 
 import java.io.IOException;
+import java.net.URL;
 import java.util.Hashtable;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import javax.annotation.PostConstruct;
 import javax.annotation.PreDestroy;
 
+import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.log4j.Logger;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
@@ -20,7 +23,10 @@ import com.ibm.mq.MQPutMessageOptions;
 import com.ibm.mq.MQQueue;
 import com.ibm.mq.MQQueueManager;
 import com.ibm.mq.constants.MQConstants;
+import com.ibm.mq.headers.MQDLH;
 import com.ibm.mq.headers.MQDataException;
+import com.ibm.mq.headers.MQHeaderList;
+import com.ibm.mq.headers.MQRFH2;
 import com.ibm.mq.headers.pcf.PCFMessageAgent;
 
 
@@ -45,6 +51,11 @@ public class MQConnection {
 	
 	private int port;
 	
+	@Value("${ibm.mq.useCCDT:false}")
+	private boolean useCCDT;
+	@Value("${ibm.mq.ccdtFile:missing}")
+	private String ccdtFile;
+
 	@Value("${ibm.mq.user}")
 	private String userId;
 	@Value("${ibm.mq.password}")
@@ -59,9 +70,6 @@ public class MQConnection {
 	@Value("${application.debug:false}")
     private boolean _debug;
 	
-	@Value("${application.exceptions.show:true}")
-    private boolean _exceptions;
-	
 	@Value("${ibm.mq.security.truststore}")
 	private String truststore;
 	@Value("${ibm.mq.security.truststore-password}")
@@ -71,83 +79,107 @@ public class MQConnection {
 	@Value("${ibm.mq.security.keystore-password}")
 	private String keystorepass;
 	
+    @Value("${ibm.mq.mqmd.rfh2.include:false}")
+	private boolean includeRFH2;  
+    /*
+     * 1 - REQUEST
+     * 8 - DATAGRAM
+     */
+    @Value("${ibm.mq.mqmd.messageType.reqType:8}")
+	private int reqType;	
+    @Value("${ibm.mq.mqmd.messageType.replyToQM:}")
+	private String replyToQM;	
+    @Value("${ibm.mq.mqmd.messageType.replyToQueue:}")
+	private String replyToQueue;	
+    
+    /*
+     * Message Expiry - in 10ths of seconds
+     * -1 - Unlimited Expiry
+     */    
+    @Value("${ibm.mq.mqmd.expiry:-1}")
+	private int msgExpiry;	
+    
+    @Value("${ibm.mq.retries.maxAttempts:3}")
+	private int maxAttempts;	
+
 	private MQQueueManager queManager;
-
-	private boolean needToReconnect = true;
-	private boolean needToConnect = true;
-	
-	/*
-	@Scheduled(fixedDelayString="10000")
-    public void Scheduler() {
-
-		log.info("Attempting to creating MQ Queue Manager Object");
-		
-		if (this.queManager != null) {
-			try {
-				if (!this.queManager.isConnected()) {
-					CreateQueueManagerConnection();
-					MQQueue queue = queManager.accessQueue("KAFKA.IN",MQConstants.MQOO_OUTPUT);
-					MQMessage newmsg = new MQMessage();	
-				    String message = "This is a test message";
-					newmsg.write(message.getBytes());
-
-					newmsg.format  		= MQConstants.MQFMT_STRING;
-					newmsg.messageId 		= MQConstants.MQMI_NONE;
-					newmsg.correlationId 	= MQConstants.MQCI_NONE;
-					newmsg.messageType      = MQConstants.MQMT_DATAGRAM;
-
-					MQPutMessageOptions pmo = new MQPutMessageOptions();	
-					queue.put(newmsg, pmo);
-
-				}
-				
-			} catch (MQException e) {
-				log.info("MQException unable to connect to queue manager");
-
-			} catch (MQDataException e) {
-				log.info("MQDataException unable to connect to queue manager");
-			
-			} catch (IOException e) {
-				// TODO Auto-generated catch block
-				e.printStackTrace();
-			}
-			
-		}
-	}
-	*/
+	private MQQueue queue;
+	private String dlqName;
 	
 	public MQConnection() {
-		log.info("MQConnection ******** Thread name : " + Thread.currentThread().getName());
 	}
 	
-	public void reconnect() throws MQException, MQDataException {
+	/*
+	 * Ensure that the MQ message expiry is set correctly ...
+	 * ... if someone has passed in the messageExpiry value to be less than -1 or equal to zero (0)
+	 * ... the set as unlimited (-1)
+	 */
+	@PostConstruct
+	private void validateExpiry() {
+	
+		if ((this.msgExpiry < MQConstants.MQEI_UNLIMITED) || (this.msgExpiry == 0)) {
+			log.info("Message expiry is invalid, resetting to UNLIMITED ");
+			this.msgExpiry = MQConstants.MQEI_UNLIMITED;
+		}
 		
-		//if (!this.queManager.isConnected()) {
-		this.queManager = null;
-		this.queManager = CreateQueueManagerConnection();
-		//}
-		setNeedToConnect(false);
-		
-		setNeedToReconnect(false);
-		
-		//return this.queManager;
+		if (this.msgExpiry != MQConstants.MQEI_UNLIMITED) {
+			if (this.msgExpiry < 30) {
+				log.warn("Message expiry is in 10ths of seconds ; low message expiry ( < 30 ) : "  + this.msgExpiry);
+				
+			}
+			if ((this.msgExpiry >= 30) && (this.msgExpiry < 100)) {
+				log.warn("Message expiry is in 10ths of seconds ; medium message expiry ( >= 30 < 100 ) : "  + this.msgExpiry);
+				
+			}
+		}
 		
 	}
 	
+	/*
+	 * Ensure we are processing a REQUEST or DATAGRAM message
+	 */
+	@PostConstruct
+	private void validateReplyToQueueManager() {
+
+		if (this._debug) { log.info("Request message type : " + reqType); } 
+		if (!(this.reqType != MQConstants.MQMT_DATAGRAM) 
+				|| (!(this.reqType != MQConstants.MQMT_REQUEST))) {
+			log.info("Request message type is valid");
+		
+		} else {
+			log.error("Request message type mismatch; 1 - REQUEST, 8 - DATAGRAM");
+			System.exit(1);
+		}
+		
+		// Only check for reply to queue being empty, as the reply-to-queuemanager can be empty
+		if (this.reqType == MQConstants.MQMT_REQUEST) {
+			if (this.replyToQueue.isEmpty()) {
+				log.error("ReplyToQueue is missing, for request type REQUEST");
+				System.exit(1);
+				
+			}
+		} 
+		
+	}
+	
+
+	/*
+	 * Connect to the queue manager ...
+	 * ... using either a connection name string (connName)
+	 * ... or an MQ CCDT (Client Channel Defintion Table) 
+	 */
 	@Bean("queuemanager") 
-	public MQQueueManager CreateQueueManagerConnection() throws MQException, MQDataException {
+	public MQQueueManager createQueueManagerConnection() throws MQException, MQDataException, Exception {
 		
-		//if (getNeedToConnect()) {
-			//setNeedToConnect(false);
-		//	return null;
-		//}
-		
-		GetEnvironmentVariables();
+		validateHostAndPort();
+		validateUser();
 		
 		Hashtable<String, Comparable> env = new Hashtable<String, Comparable>();
-		env.put(MQConstants.HOST_NAME_PROPERTY, this.hostName);
-		env.put(MQConstants.CHANNEL_PROPERTY, this.channel);
-		env.put(MQConstants.PORT_PROPERTY, this.port);
+		if (!this.useCCDT) {
+			env.put(MQConstants.HOST_NAME_PROPERTY, this.hostName);
+			env.put(MQConstants.CHANNEL_PROPERTY, this.channel);
+			env.put(MQConstants.PORT_PROPERTY, this.port);
+		}		
 		env.put(MQConstants.CONNECT_OPTIONS_PROPERTY, MQConstants.MQCNO_RECONNECT);
 		
 		/*
@@ -204,51 +236,222 @@ public class MQConnection {
 			log.info("Cipher Suite     : " + this.cipher);
 		}
 		
-		log.info("Attempting to connect to queue manager " + this.queueManager);
-		this.queManager = new MQQueueManager(this.queueManager, env);
-		log.info("Connection to queue manager established ");
+		/*
+		 * Connect either using the host/port or CCDT file
+		 */
+		if (!this.useCCDT) {
+			log.info("Attempting to connect to queue manager " + this.queueManager);
+			this.queManager = new MQQueueManager(this.queueManager, env);
+			log.info("Connection to queue manager established ");
+			
+		} else {
+			URL ccdtFileName = new URL("file:///" + this.ccdtFile);
+			log.info("Attempting to connect to queue manager " + this.queueManager + " using CCDT file");
+			this.queManager = new MQQueueManager(this.queueManager, env, ccdtFileName);
+			log.info("Connection to queue manager established ");			
+		}
+	
+		this.dlqName = this.queManager.getAttributeString(MQConstants.MQCA_DEAD_LETTER_Q_NAME, 48).trim();
+		this.queue = openQueueForWriting(this.destQueue);
 		
-		//setNeedToReconnect(false);
-		
-		return queManager;
+		return this.queManager;
 	}
 	
-	@Bean 
-	@DependsOn("queuemanager")
-	public MQQueue OpenQueueForWriting() {
+	/*
+	 * Open the queue for writing
+	 */
+	public MQQueue openQueueForWriting(String qName) throws MQException {
 		
-		if (this.queManager == null) {
-			log.info("this.queManager is null"); 
-			return null;
-		}
-		
-		if (this._debug) { log.info("Opening queue " + destQueue + " for writing"); }
+		if (this._debug) { log.info("Opening queue " + qName + " for writing"); }
 		
 		MQQueue outQueue = null;
 		int openOptions = MQConstants.MQOO_FAIL_IF_QUIESCING 
 					+ MQConstants.MQOO_OUTPUT ;
 
-		try {
-			outQueue = this.queManager.accessQueue(destQueue, openOptions);
-			if (this._debug) { log.info("********* Queue opened"); }
-			
-		} catch (MQException e) {
-			log.error("Unable to open queue : " + destQueue + " : " + e.getMessage() );
-			System.exit(1);
-		}
+		outQueue = this.queManager.accessQueue(qName, openOptions);
+		if (this._debug) { log.info("Queue opened successfully"); }
 			
 		return outQueue;
 		
 	}
+
 	
-	private void GetEnvironmentVariables() {
+	public void SendMessage(ConsumerRecord<?,?> consumerRecord) throws IOException, InterruptedException, MQDataException {
+		
+		MQMessage newmsg = new MQMessage();		
+
+		if (this.includeRFH2) {
+		    MQRFH2 rfh2 = new MQRFH2();
+		    rfh2.setEncoding(MQConstants.MQENC_NATIVE);
+		    rfh2.setCodedCharSetId(MQConstants.MQCCSI_INHERIT);
+		    rfh2.setFormat(MQConstants.MQFMT_STRING);
+		    rfh2.setNameValueCCSID(1208);
+		    rfh2.setFlags(0);
+	
+		    rfh2.setFieldValue("mcd", "Msd", "");
+		    rfh2.setFieldValue("jms", "Dst", "");
+		    
+			rfh2.setFieldValue("usr", "source-topic", consumerRecord.topic());
+		    
+			if (consumerRecord.key() != null) {
+				rfh2.setFieldValue("usr", "key", consumerRecord.key());
+			} else {
+				rfh2.setFieldValue("usr", "key", "null");			
+			}
+		    rfh2.write(newmsg);
+	
+		    String message = (String) consumerRecord.value();
+		    newmsg.write(message.getBytes());
+		    
+		    //newmsg.format  		= MQConstants.MQFMT_STRING;
+			//newmsg.feedback         = MQConstants.MQFB_NONE;
+			newmsg.messageId 		= MQConstants.MQMI_NONE;
+			newmsg.correlationId 	= MQConstants.MQCI_NONE;
+			newmsg.messageType      = MQConstants.MQMT_DATAGRAM;
+			newmsg.format 			= MQConstants.MQFMT_RF_HEADER_2;
+		} else {
+
+		    String message = (String) consumerRecord.value();
+		    newmsg.write(message.getBytes());
+
+			newmsg.format  		= MQConstants.MQFMT_STRING;
+			//newmsg.feedback         = MQConstants.MQFB_NONE;
+			newmsg.messageId 		= MQConstants.MQMI_NONE;
+			newmsg.correlationId 	= MQConstants.MQCI_NONE;
+			newmsg.messageType      = MQConstants.MQMT_DATAGRAM;
+			
+		}
+		
+		if (this.reqType == MQConstants.MQMT_REQUEST) {
+			newmsg.messageType      		= MQConstants.MQMT_REQUEST;
+			newmsg.replyToQueueManagerName  = this.replyToQM;
+			newmsg.replyToQueueName  		= this.replyToQueue;
+			
+		}
+		newmsg.expiry = this.msgExpiry;
+		
+		MQPutMessageOptions pmo = new MQPutMessageOptions();	
+		pmo.options = MQConstants.MQPMO_NEW_MSG_ID + MQConstants.MQPMO_FAIL_IF_QUIESCING;
+		
+		if (this._debug) {
+			log.info("Queue manager objected is created ");
+			log.info("Attempting to write to queue ...");				
+		}
+
+		putMessageToMQ(newmsg, pmo);
+
+		if (this._debug) {
+			log.info("Message written to queue successully ...");
+		}		
+		
+		
+	}
+
+	/*
+	 * 'put' the message to MQ
+	 */
+	private void putMessageToMQ(MQMessage message, MQPutMessageOptions pmo) throws InterruptedException, MQDataException, IOException {
+		
+		int attempts = 1;
+		
+		while (attempts <= this.maxAttempts) {
+		
+			try {
+				this.queue.put(message, pmo); 
+				break;
+				
+			} catch (MQException e) {
+				if (e.completionCode == 2 && 
+						((e.reasonCode == MQConstants.MQRC_CONNECTION_BROKEN)
+						|| (e.reasonCode == MQConstants.MQRC_CONNECTION_QUIESCING))) {
+					
+					try {
+						attempts++;
+						Thread.sleep(5000);
+						this.queManager = createQueueManagerConnection();
+						this.queue = openQueueForWriting(this.destQueue);
+					
+					} catch (MQException mqe) {
+						log.warn("MQ error exception, trying to put messages : " + mqe.getMessage());
+						log.warn("Trying to reconnect : " + mqe.getMessage());
+						Thread.sleep(5000);
+						
+					} catch (Exception e1) {
+						log.warn("Error trying to put messages : " + e1.getMessage());
+						log.warn("Trying to reconnect : " + e1.getMessage());
+						Thread.sleep(5000);
+
+					}
+						
+			 	} else {
+					log.error("Unhandled MQException : reasonCode " + e.reasonCode );
+					log.error("Exception : " + e.getMessage() );
+					WriteMessageToDLQ(message);
+					break;
+				}
+			}
+		}
+		if (attempts > this.maxAttempts) {
+			log.error("Unable to reconnect to queue manager " );
+			System.exit(1);			
+		}
+		
+	}
+	
+	/*
+	 * if we get an error writing to a queue, try writing it to the DLQ
+	 */
+	private void WriteMessageToDLQ(MQMessage message) throws MQDataException, IOException {
+
+		MQPutMessageOptions pmo = new MQPutMessageOptions();	
+		pmo.options = MQConstants.MQPMO_NEW_MSG_ID + MQConstants.MQPMO_FAIL_IF_QUIESCING;
+		message.expiry = -1;
+
+		MQQueue dlqQueue = null;
+		try {
+			dlqQueue = openQueueForWriting(this.dlqName);	
+			dlqQueue.put(message,pmo);
+			log.warn("Message written to DLQ");
+			
+		} catch (MQException e) {
+			log.error("Error writting to DLQ " + this.dlqName);
+			log.error("Reason : " + e.reasonCode + " Description : " + e.getMessage());			
+						
+		} catch (Exception e) {
+			log.error("Error writting to DLQ " + this.dlqName);
+			log.error("Description : " + e.getMessage());
+
+		} finally {
+			try {
+				if (dlqQueue != null) {
+					dlqQueue.close();
+				}	
+				
+			} catch (MQException e) {
+				log.warn("Error closing DLQ " + this.dlqName);
+			}
+		}
+		
+	}
+	
+	/*
+	 * Set the connection string and port number ...
+	 */
+	private void validateHostAndPort() {
 		
 		/*
 		 * ALL parameter are passed in the application.yaml file ...
 		 *    These values can be overrrided using an application-???.yaml file per environment
 		 *    ... or passed in on the command line
 		 */
-		
+		if (this.useCCDT && (!this.connName.equals(""))) {
+			log.error("The use of MQ CCDT filename and connName are mutually exclusive");
+			System.exit(1);
+		}
+		if (this.useCCDT) {
+			return;
+		}
+
 		// Split the host and port number from the connName ... host(port)
 		if (!this.connName.equals("")) {
 			Pattern pattern = Pattern.compile("^([^()]*)\\(([^()]*)\\)(.*)$");
@@ -257,14 +460,20 @@ public class MQConnection {
 				this.hostName = matcher.group(1).trim();
 				this.port = Integer.parseInt(matcher.group(2).trim());
 			} else {
-				if (this._exceptions) { log.error("While attempting to connect to a queue manager, the connName is invalid "); }
+				log.error("While attempting to connect to a queue manager, the connName is invalid ");
 				System.exit(1);				
 			}
 		} else {
-			if (this._exceptions) {log.error("While attempting to connect to a queue manager, the connName is missing  "); }
+			log.error("While attempting to connect to a queue manager, the connName is missing ");
 			System.exit(1);
 			
 		}
+	}
+
+	/*
+	 * Check the user, if its passed in 
+	 */
+	private void validateUser() {
 
 		// if no use, for get it ...
 		if (this.userId == null) {
@@ -280,7 +489,8 @@ public class MQConnection {
 			this.userId = null;
 			this.password = null;
 		}
-	
+		
+		
 	}
 	
 	public MQQueueManager getQueueManager() {
@@ -288,7 +498,7 @@ public class MQConnection {
 	}
 	
     @PreDestroy
-    public void CloseQMConnection() {
+    public void closeQMConnection() {
     	
     	try {
 	    	if (this.queManager != null) {	
@@ -303,18 +513,18 @@ public class MQConnection {
     	}
     }
 
-	public synchronized boolean needToReconnect() {
-		return this.needToReconnect;
-	}
-	public synchronized void setNeedToReconnect(boolean val) {
-		this.needToReconnect = val;
-	}
+	//public synchronized boolean needToReconnect() {
+	//	return this.needToReconnect;
+	//}
+	//public synchronized void setNeedToReconnect(boolean val) {
+	//	this.needToReconnect = val;
+	//}
 
-	public synchronized boolean getNeedToConnect() {
-		return this.needToConnect;
-	}
-	public synchronized void setNeedToConnect(boolean val) {
-		this.needToConnect = val;
-	}
+	//public synchronized boolean getNeedToConnect() {
+	//	return this.needToConnect;
+	//}
+	//public synchronized void setNeedToConnect(boolean val) {
+	//	this.needToConnect = val;
+	//}
 	
 }

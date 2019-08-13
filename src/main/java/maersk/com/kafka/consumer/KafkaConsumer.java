@@ -17,6 +17,7 @@ import org.springframework.stereotype.Component;
 
 import com.ibm.mq.MQException;
 import com.ibm.mq.constants.MQConstants;
+import com.ibm.mq.headers.MQDataException;
 
 import maersk.com.kafka.AoKafkaToMqApplication;
 import maersk.com.kafka.mq.MQConnection;
@@ -40,15 +41,15 @@ public class KafkaConsumer {
 	
 	@KafkaListener(topics = "${kafka.src.topic}" ) 
 //			partitionOffsets = @PartitionOffset(initialOffset = "0", partition = "0")) )
-    public void listen(ConsumerRecord<?,?> consumerRecord, Acknowledgment ack) {
+    public void listen(ConsumerRecord<?,?> consumerRecord, Acknowledgment ack) throws InterruptedException, MQDataException {
 
 		log.info("Attempting to write message ...");
-		
+
 		if (this.mqproducer != null) {
 			log.info("Kafka Listener .... MQProducer exists");
 			try {
 				String msg = (String) consumerRecord.value();
-				this.mqproducer.WriteMessage(consumerRecord);
+				this.mqproducer.buildMessage(consumerRecord);
 				if (ack != null) {
 					ack.acknowledge();
 				}
@@ -57,15 +58,9 @@ public class KafkaConsumer {
 				log.error("Error writting message : " + e.getMessage());
 			
 			} catch (MQException e) {
-				log.error("Error writting message : " + e.reasonCode);
-				if (e.reasonCode == MQConstants.MQRC_Q_FULL) {
-					log.error("Queue is full ...");
-					System.exit(1);
-				}
-				if (e.reasonCode == MQConstants.MQRC_CONNECTION_BROKEN) {
-					log.error("Queue manager was disconnected ...");
-					this.conn.setNeedToReconnect(true);
-				}
+				log.error("Error occurred writing messages to MQ : " + e.reasonCode);
+				log.error("See the logs for additional details : " + e.getMessage());
+				System.exit(1);
 
 			}
 		}
