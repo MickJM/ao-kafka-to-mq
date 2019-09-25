@@ -1,5 +1,11 @@
 package maersk.com.kafka.consumer;
 
+/*
+ * Kafka Configuration
+ * 
+ *  Copyright Maersk 2019
+ */
+
 import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.util.HashMap;
@@ -57,11 +63,9 @@ public class KafkaConfiguration {
     private String srcMaxPollRecords;
     @Value("${kafka.src.topic}")
     private String sourceTopic;
-    @Value("${kafka.src.security.protocol:SASL_SSL}")
+    @Value("${kafka.src.sasl.protocol:SASL_SSL}")
     private String srcSecurityProtocol;
-    @Value("${kafka.src.clientId}")
-    private String srcClientId;
-    @Value("${kafka.src.concurrency:3}")
+    @Value("${kafka.src.concurrency:1}")
     private int srcConcurrency;
     @Value("${kafka.src.retry.max.attempts:3}")
     private int maxRetryAttempts;
@@ -70,8 +74,8 @@ public class KafkaConfiguration {
     @Value("${kafka.src.consumer.retry.max.interval.secs:10}")
     private int retryMaxIntervalSeconds;
 
-	@Value("${kafka.application.concurrency:3}")
-	private int concurrency;
+	@Value("${application.name:kafka-consumer}")
+	private String clientId;
 
     @Bean
     public ConsumerFactory<String, String> consumerFactory() {
@@ -90,15 +94,14 @@ public class KafkaConfiguration {
         properties.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, false);
         properties.put(ConsumerConfig.MAX_POLL_RECORDS_CONFIG, this.srcMaxPollRecords);
     
-        properties.put("client.id", this.srcClientId);
+        properties.put(ConsumerConfig.CLIENT_ID_CONFIG, this.clientId);
         try {
-			properties.put("client.id", InetAddress.getLocalHost().getHostName());
+			properties.put(ConsumerConfig.CLIENT_ID_CONFIG, InetAddress.getLocalHost().getHostName());
 
         } catch (UnknownHostException e) {
 			// do nothing ....
 		}
         
-        //properties.put(ConsumerConfig.PARTITION_ASSIGNMENT_STRATEGY_CONFIG)
 		if (this._debug) { log.info("ConsumerFactory: setting SASL"); }
         addSaslProperties(properties, srcSaslMechanism, srcSecurityProtocol, srcLoginModule, srcUsername, srcPassword);
 
@@ -114,32 +117,27 @@ public class KafkaConfiguration {
 
 		if (this._debug) { log.info("KafkaListenerContainerFactory: Start"); }
 
-		if (this._debug) { log.info("KafkaListenerContainerFactory: Concurrency: " + this.concurrency); }
+		if (this._debug) { log.info("KafkaListenerContainerFactory: srcConcurrency: " + this.srcConcurrency); }
 		
 		ConcurrentKafkaListenerContainerFactory<String, String> factory 
         			= new ConcurrentKafkaListenerContainerFactory<>();
         factory.setConsumerFactory(consumerFactory);        
-        factory.setConcurrency(this.concurrency);
+        factory.setConcurrency(this.srcConcurrency);
         factory.getContainerProperties().setPollTimeout(3000);
         factory.getContainerProperties().setAckMode(AckMode.MANUAL_IMMEDIATE);
         factory.setRetryTemplate(retryTemplate());
         factory.setStatefulRetry(true);
         
-        //factory.getContainerProperties().setErrorHandler(new KafkaErrorHandler());
-        
-        //factory.setAutoStartup(false);
-        //factory.setBatchListener(true);
-        
 		if (this._debug) { 
 			log.info("KafkaListenerContainerFactory: setPollTimeOut : 3000"); 
 			log.info("KafkaListenerContainerFactory: return");
 		}        
-
-		//factory.setStatefulRetry(true);
-		
         return factory;
     }
     
+	/*
+	 * Create a RetryTemplate
+	 */
     private RetryTemplate retryTemplate() {
         RetryTemplate template = new RetryTemplate();
         template.setRetryPolicy(retryPolicy());
@@ -148,6 +146,9 @@ public class KafkaConfiguration {
     
     }
 
+    /*
+     * Create a Retry policy
+     */
     private RetryPolicy retryPolicy() {
         SimpleRetryPolicy policy = new SimpleRetryPolicy();
         policy.setMaxAttempts(maxRetryAttempts);
@@ -155,6 +156,9 @@ public class KafkaConfiguration {
     
     }
 
+    /*
+     * Create a BackOff policy object
+     */
     private BackOffPolicy backOffPolicy() {
         ExponentialBackOffPolicy policy = new ExponentialBackOffPolicy();
         policy.setInitialInterval(retryInitialIntervalSeconds*1000);
@@ -163,15 +167,8 @@ public class KafkaConfiguration {
     
     }
     
-    /***
+    /*
      * Add SASL properties
-     * 
-     * @param properties
-     * @param saslMechanism
-     * @param securityProtocol
-     * @param loginModule
-     * @param username
-     * @param password
      */
     private void addSaslProperties(Map<String, Object> properties, String saslMechanism, String securityProtocol, String loginModule, String username, String password) {
 
@@ -192,12 +189,8 @@ public class KafkaConfiguration {
 
     }
 
-    /***
-     * Add TLS Truststore
-     * 
-     * @param properties
-     * @param location
-     * @param password
+    /*
+     * Add the truststore
      */
     private void addTruststoreProperties(Map<String, Object> properties, String location, String password) {
 		

@@ -16,11 +16,10 @@ kafka:
     password: D3CKp9bhZj58V0e3lTMBi1Y5zySNYGsb1_ReUabCMov0    
     topic: mmo275topic
 # >>> not needed for cloud     
-    security1:
-      protocol1: SASL_PLAINTEXT
-    sasl1:
-      mechanism: SCRAM-SHA-256
-      mechanism1: PLAIN
+    sasl:
+      protocol: SASL_SSL
+      mechanism1: SCRAM-SHA-256
+      mechanism: PLAIN
 # <<<
     clientId: kafka-to-mq
     login:
@@ -31,7 +30,6 @@ kafka:
       location: C:\Program Files\Java\jdk-10.0.1\lib\security\cacerts
       location2: c:\Users\mickm\OneDrive\Documents\Development\Docker\kafka-to-mq\kafkaMQcerts
       password: changeit
-  debug: true
 ibm:
   mq:
     queueManager: "*KAFKAMQ"
@@ -41,18 +39,18 @@ ibm:
     useSSL: true
     user: 
     password: 
-    queue: KAFKA.IN
+    queue: KAFKA.REPLY
     retries:
        maxAttempts: 3
     useCCDT: true
     ccdtFile: C:\ProgramData\IBM\MQ\qmgrs\QMAP01\@ipcc\AMQCLCHL.TAB
     mqmd:
       rfh2: 
-        include: false
-      expiry: 600
+        include: true
+      expiry: -1
 # reqType ; 1 = REQUEST, 8 = DATAGRAM
       messageType:
-        reqType: 1
+        reqType: 8
         replyToQM: 
         replyToQueue: MICK.OUT
     security:
@@ -68,12 +66,20 @@ management:
   endpoints:
     web:
       exposure:
-        include: "*"
+        include: info, prometheus
   endpoint:
     health:
       show-details: always        
   security:
     enabled: false
+info:
+  app:
+    name: Kafka to MQ
+    description: Send Kafka messages to MQ
+    version: 0.0.0.0
+    java:
+      version: 0.0.0.0   
+    
 server:
   port:
-    8092
+    8093

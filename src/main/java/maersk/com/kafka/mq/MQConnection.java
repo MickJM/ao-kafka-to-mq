@@ -1,8 +1,16 @@
 package maersk.com.kafka.mq;
 
+/*
+ * Connect to a queue manager
+ * 
+ *  Copyright Maersk 2019
+ */
+
 import java.io.IOException;
 import java.net.URL;
 import java.util.Hashtable;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -11,9 +19,11 @@ import javax.annotation.PreDestroy;
 
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.log4j.Logger;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.DependsOn;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -29,11 +39,17 @@ import com.ibm.mq.headers.MQHeaderList;
 import com.ibm.mq.headers.MQRFH2;
 import com.ibm.mq.headers.pcf.PCFMessageAgent;
 
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Tags;
+import maersk.com.kafka.constants.MQKafkaConstants;
 
 @Component
 public class MQConnection {
 
-	private Logger log = Logger.getLogger(this.getClass());
+	protected Logger log = Logger.getLogger(this.getClass());
+	
+	@Value("${application.debug:false}")
+    private boolean _debug;
 
 	@Value("${ibm.mq.queuemanager}")
 	private String queueManager;
@@ -65,11 +81,8 @@ public class MQConnection {
 
 	//
 	@Value("${ibm.mq.useSSL}")
-	private boolean bUseSSL;
-	
-	@Value("${application.debug:false}")
-    private boolean _debug;
-	
+	private boolean useSSL;
+		
 	@Value("${ibm.mq.security.truststore}")
 	private String truststore;
 	@Value("${ibm.mq.security.truststore-password}")
@@ -79,8 +92,13 @@ public class MQConnection {
 	@Value("${ibm.mq.security.keystore-password}")
 	private String keystorepass;
 	
+	/*
+	 * if we want the source kafka topic and kafka key on the MQ message
+	 * ... use the MQRFH2 header to store the additional meta-data
+	 */
     @Value("${ibm.mq.mqmd.rfh2.include:false}")
 	private boolean includeRFH2;  
+
     /*
      * 1 - REQUEST
      * 8 - DATAGRAM
@@ -117,17 +135,17 @@ public class MQConnection {
 	@PostConstruct
 	private void validateExpiry() {
 	
-		if ((this.msgExpiry < MQConstants.MQEI_UNLIMITED) || (this.msgExpiry == 0)) {
-			log.info("Message expiry is invalid, resetting to UNLIMITED ");
+		if ((this.msgExpiry < MQConstants.MQEI_UNLIMITED) || (this.msgExpiry == MQKafkaConstants.MQMD_EXPIRY_UNLIMITED)) {
+			log.warn("Message expiry is invalid, resetting to UNLIMITED ");
 			this.msgExpiry = MQConstants.MQEI_UNLIMITED;
 		}
 		
 		if (this.msgExpiry != MQConstants.MQEI_UNLIMITED) {
-			if (this.msgExpiry < 30) {
+			if (this.msgExpiry < MQKafkaConstants.MQMD_EXPIRY_LOW) {
 				log.warn("Message expiry is in 10ths of seconds ; low message expiry ( < 30 ) : "  + this.msgExpiry);
 				
 			}
-			if ((this.msgExpiry >= 30) && (this.msgExpiry < 100)) {
+			if ((this.msgExpiry >= MQKafkaConstants.MQMD_EXPIRY_LOW) && (this.msgExpiry < MQKafkaConstants.MQMD_EXPIRY_MEDIUM)) {
 				log.warn("Message expiry is in 10ths of seconds ; medium message expiry ( >= 30 < 100 ) : "  + this.msgExpiry);
 				
 			}
@@ -144,7 +162,7 @@ public class MQConnection {
 		if (this._debug) { log.info("Request message type : " + reqType); } 
 		if (!(this.reqType != MQConstants.MQMT_DATAGRAM) 
 				|| (!(this.reqType != MQConstants.MQMT_REQUEST))) {
-			log.info("Request message type is valid");
+			if (this._debug) {  log.info("Request message type is valid"); }
 		
 		} else {
 			log.error("Request message type mismatch; 1 - REQUEST, 8 - DATAGRAM");
@@ -159,7 +177,6 @@ public class MQConnection {
 				
 			}
 		} 
-		
 	}
 	
 
@@ -175,6 +192,10 @@ public class MQConnection {
 		validateUser();
 		
 		Hashtable<String, Comparable> env = new Hashtable<String, Comparable>();
+		/*
+		 * if we are not using a CCDT file (Client Channel Definition Table), set the MQ attributes from
+		 * ... the config file
+		 */
 		if (!this.useCCDT) {
 			env.put(MQConstants.HOST_NAME_PROPERTY, this.hostName);
 			env.put(MQConstants.CHANNEL_PROPERTY, this.channel);
@@ -191,11 +212,9 @@ public class MQConnection {
 		 */
 		
 		if (this.userId != null) {
-			env.put(MQConstants.USER_ID_PROPERTY, this.userId); 
-		}
+			env.put(MQConstants.USER_ID_PROPERTY, this.userId);  }
 		if (this.password != null) {
-			env.put(MQConstants.PASSWORD_PROPERTY, this.password);
-		}
+			env.put(MQConstants.PASSWORD_PROPERTY, this.password); }
 		env.put(MQConstants.TRANSPORT_PROPERTY,MQConstants.TRANSPORT_MQSERIES);
 
 		if (this._debug) {
@@ -205,13 +224,14 @@ public class MQConnection {
 			log.info("Queue Man : " + this.queueManager);
 			log.info("User 		: " + this.userId);
 			log.info("Password  : **********");
-			if (this.bUseSSL) {
-				log.info("SSL is enabled ....");
-			}
+			if (this.useSSL) {
+				log.info("SSL is enabled ...."); }
 		}
 		
-		// If SSL is enabled (default)
-		if (this.bUseSSL) {
+		/*
+		 * if SSL is enabled on the MQ channel, show some details
+		 */
+		if (this.useSSL) {
 			System.setProperty("javax.net.ssl.trustStore", this.truststore);
 	        System.setProperty("javax.net.ssl.trustStorePassword", this.truststorepass);
 	        System.setProperty("javax.net.ssl.trustStoreType","JKS");
@@ -223,11 +243,12 @@ public class MQConnection {
 		
 		} else {
 			if (this._debug) {
-				log.info("SSL is NOT enabled ....");
-			}
+				log.info("SSL is NOT enabled ...."); }
 		}
 		
-        //System.setProperty("javax.net.debug","all");
+        /*
+         * if there are any SSL issues, use -Djavax.net.debug=all on the JVM command
+         */
 		if (this._debug) {
 			log.info("TrustStore       : " + this.truststore);
 			log.info("TrustStore Pass  : ********");
@@ -237,7 +258,7 @@ public class MQConnection {
 		}
 		
 		/*
-		 * Connect either using the host/port or CCDT file
+		 * Connect to a queue manager, either using the host/port or CCDT file
 		 */
 		if (!this.useCCDT) {
 			log.info("Attempting to connect to queue manager " + this.queueManager);
@@ -251,6 +272,9 @@ public class MQConnection {
 			log.info("Connection to queue manager established ");			
 		}
 	
+		/*
+		 * Get the queue managers dead-letter-queue and open the destination queue for output
+		 */
 		this.dlqName = this.queManager.getAttributeString(MQConstants.MQCA_DEAD_LETTER_Q_NAME, 48).trim();
 		this.queue = openQueueForWriting(this.destQueue);
 		
@@ -258,7 +282,7 @@ public class MQConnection {
 	}
 	
 	/*
-	 * Open the queue for writing
+	 * Open the queue for output
 	 */
 	public MQQueue openQueueForWriting(String qName) throws MQException {
 		
@@ -275,11 +299,16 @@ public class MQConnection {
 		
 	}
 
-	
+	/*
+	 * Send the message
+	 */
 	public void SendMessage(ConsumerRecord<?,?> consumerRecord) throws IOException, InterruptedException, MQDataException {
-		
-		MQMessage newmsg = new MQMessage();		
 
+		MQMessage newmsg = new MQMessage();
+		
+		/*
+		 * If we are wanting to create an MRFH2 header, then do so ...
+		 */
 		if (this.includeRFH2) {
 		    MQRFH2 rfh2 = new MQRFH2();
 		    rfh2.setEncoding(MQConstants.MQENC_NATIVE);
@@ -287,41 +316,35 @@ public class MQConnection {
 		    rfh2.setFormat(MQConstants.MQFMT_STRING);
 		    rfh2.setNameValueCCSID(1208);
 		    rfh2.setFlags(0);
-	
+		    
 		    rfh2.setFieldValue("mcd", "Msd", "");
 		    rfh2.setFieldValue("jms", "Dst", "");
-		    
 			rfh2.setFieldValue("usr", "source-topic", consumerRecord.topic());
 		    
 			if (consumerRecord.key() != null) {
 				rfh2.setFieldValue("usr", "key", consumerRecord.key());
-			} else {
-				rfh2.setFieldValue("usr", "key", "null");			
 			}
-		    rfh2.write(newmsg);
-	
+		    rfh2.write(newmsg);	
 		    String message = (String) consumerRecord.value();
 		    newmsg.write(message.getBytes());
-		    
-		    //newmsg.format  		= MQConstants.MQFMT_STRING;
-			//newmsg.feedback         = MQConstants.MQFB_NONE;
-			newmsg.messageId 		= MQConstants.MQMI_NONE;
+			newmsg.format 			= MQConstants.MQFMT_RF_HEADER_2;
+		    newmsg.messageId 		= MQConstants.MQMI_NONE;
 			newmsg.correlationId 	= MQConstants.MQCI_NONE;
 			newmsg.messageType      = MQConstants.MQMT_DATAGRAM;
-			newmsg.format 			= MQConstants.MQFMT_RF_HEADER_2;
+			
 		} else {
-
 		    String message = (String) consumerRecord.value();
 		    newmsg.write(message.getBytes());
-
-			newmsg.format  		= MQConstants.MQFMT_STRING;
-			//newmsg.feedback         = MQConstants.MQFB_NONE;
+			newmsg.format  			= MQConstants.MQFMT_STRING;
 			newmsg.messageId 		= MQConstants.MQMI_NONE;
 			newmsg.correlationId 	= MQConstants.MQCI_NONE;
 			newmsg.messageType      = MQConstants.MQMT_DATAGRAM;
 			
 		}
 		
+		/*
+		 * If the message type is a request, set the details on the MQMD header
+		 */
 		if (this.reqType == MQConstants.MQMT_REQUEST) {
 			newmsg.messageType      		= MQConstants.MQMT_REQUEST;
 			newmsg.replyToQueueManagerName  = this.replyToQM;
@@ -330,38 +353,38 @@ public class MQConnection {
 		}
 		newmsg.expiry = this.msgExpiry;
 		
+		/*
+		 * Create a PutMessageOptions object and write the message
+		 */
 		MQPutMessageOptions pmo = new MQPutMessageOptions();	
 		pmo.options = MQConstants.MQPMO_NEW_MSG_ID + MQConstants.MQPMO_FAIL_IF_QUIESCING;
-		
 		if (this._debug) {
-			log.info("Queue manager objected is created ");
-			log.info("Attempting to write to queue ...");				
-		}
-
+			log.info("Attempting to write to queue ..."); }
 		putMessageToMQ(newmsg, pmo);
 
 		if (this._debug) {
-			log.info("Message written to queue successully ...");
-		}		
-		
+			log.info("Message written to queue successully ..."); }
 		
 	}
 
 	/*
-	 * 'put' the message to MQ
+	 * 'put' the message to the connected queue manager 
+	 * 
+	 * If there is an error, try to re-connect to the queue manager and put again ...
+	 * ... if we get an error that isn't a CONNECTION_BROKER or QUIESCING, and we are connected to the queue manager
+	 * ... write the messages to the DLQ
 	 */
 	private void putMessageToMQ(MQMessage message, MQPutMessageOptions pmo) throws InterruptedException, MQDataException, IOException {
 		
-		int attempts = 1;
-		
+		int attempts = MQKafkaConstants.REPROCESS_MSG_INIT;		
 		while (attempts <= this.maxAttempts) {
 		
 			try {
 				this.queue.put(message, pmo); 
 				break;
-				
+ 
 			} catch (MQException e) {
-				if (e.completionCode == 2 && 
+				if (e.completionCode == MQKafkaConstants.REPROCESS_MSG_INIT && 
 						((e.reasonCode == MQConstants.MQRC_CONNECTION_BROKEN)
 						|| (e.reasonCode == MQConstants.MQRC_CONNECTION_QUIESCING))) {
 					
@@ -382,7 +405,6 @@ public class MQConnection {
 						Thread.sleep(5000);
 
 					}
-						
 			 	} else {
 					log.error("Unhandled MQException : reasonCode " + e.reasonCode );
 					log.error("Exception : " + e.getMessage() );
@@ -405,7 +427,7 @@ public class MQConnection {
 
 		MQPutMessageOptions pmo = new MQPutMessageOptions();	
 		pmo.options = MQConstants.MQPMO_NEW_MSG_ID + MQConstants.MQPMO_FAIL_IF_QUIESCING;
-		message.expiry = -1;
+		message.expiry = MQKafkaConstants.UNLIMITED_EXPIRY;
 
 		MQQueue dlqQueue = null;
 		try {
@@ -446,7 +468,7 @@ public class MQConnection {
 		 */
 		if (this.useCCDT && (!this.connName.equals(""))) {
 			log.error("The use of MQ CCDT filename and connName are mutually exclusive");
-			System.exit(1);
+			System.exit(MQKafkaConstants.EXIT);
 		}
 		if (this.useCCDT) {
 			return;
@@ -461,11 +483,11 @@ public class MQConnection {
 				this.port = Integer.parseInt(matcher.group(2).trim());
 			} else {
 				log.error("While attempting to connect to a queue manager, the connName is invalid ");
-				System.exit(1);				
+				System.exit(MQKafkaConstants.EXIT);				
 			}
 		} else {
 			log.error("While attempting to connect to a queue manager, the connName is missing ");
-			System.exit(1);
+			System.exit(MQKafkaConstants.EXIT);
 			
 		}
 	}
@@ -483,7 +505,7 @@ public class MQConnection {
 		if (!this.userId.equals("")) {
 			if ((this.userId.equals("mqm") || (this.userId.equals("MQM")))) {
 				log.error("The MQ channel USERID must not be running as 'mqm' ");
-				System.exit(1);
+				System.exit(MQKafkaConstants.EXIT);
 			}
 		} else {
 			this.userId = null;
