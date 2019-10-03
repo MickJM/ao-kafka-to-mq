@@ -33,3 +33,5 @@ build/
 ######
 *.yml
 *.yaml
+src\main\resources\*.yaml
+src\main\resources\*.yml
