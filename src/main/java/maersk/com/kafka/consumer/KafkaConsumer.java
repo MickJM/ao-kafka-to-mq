@@ -59,7 +59,9 @@ public class KafkaConsumer {
 	 * Create a Kafka listener and pass the consumerRecord to MQ producer object 
 	 */
 	@KafkaListener(topics = "${kafka.src.topic}" ) 
-    public void listen(ConsumerRecord<?,?> consumerRecord, Acknowledgment ack) throws InterruptedException, MQDataException {
+    public void listen(ConsumerRecord<?,?> consumerRecord, Acknowledgment ack) throws 
+    		InterruptedException, 
+    		MQDataException {
 		
 		if (this._debug) { log.info("Attempting to write message ..."); }
 		if (this.mqproducer != null) {

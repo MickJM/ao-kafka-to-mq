@@ -1,5 +1,8 @@
 package maersk.com.kafka;
 
+/*
+ * Run the 'Kafka to MQ' API
+ */
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.ConfigurableApplicationContext;

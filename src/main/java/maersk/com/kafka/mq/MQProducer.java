@@ -65,7 +65,7 @@ public class MQProducer implements ApplicationListener<ContextRefreshedEvent> {
 	 * Send the message to the connected queue manager
 	 */
 	public void buildMessage(ConsumerRecord<?,?> consumerRecord) throws IOException, MQException, InterruptedException, MQDataException {
-		this.conn.SendMessage(consumerRecord);
+		this.conn.sendMessage(consumerRecord);
 			
 	}
 	
