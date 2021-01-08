@@ -1,4 +1,4 @@
-package maersk.com.kafka;
+package app.com.kafka;
 
 import org.junit.Test;
 import org.junit.runner.RunWith;

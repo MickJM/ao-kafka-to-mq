@@ -1,4 +1,4 @@
-package maersk.com.kafka;
+package app.com.kafka;
 
 import static org.junit.Assert.*;
 
@@ -12,7 +12,7 @@ import com.ibm.mq.MQException;
 import com.ibm.mq.MQQueueManager;
 import com.ibm.mq.headers.MQDataException;
 
-import maersk.com.kafka.mq.*;
+import app.com.kafka.mq.*;
 
 @SpringBootTest
 public class QueueManagerConnectionTest {

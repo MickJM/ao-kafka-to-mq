@@ -1,4 +1,4 @@
-package maersk.com.kafka.mq;
+package app.com.kafka.mq;
 
 /*
  * Connect to a queue manager
@@ -41,10 +41,10 @@ import com.ibm.mq.headers.MQHeaderList;
 import com.ibm.mq.headers.MQRFH2;
 import com.ibm.mq.headers.pcf.PCFMessageAgent;
 
+import app.com.kafka.constants.MQKafkaConstants;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Metrics;
 import io.micrometer.core.instrument.Tags;
-import maersk.com.kafka.constants.MQKafkaConstants;
 
 @Component
 public class MQConnection {

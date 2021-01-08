@@ -1,4 +1,4 @@
-package maersk.com.kafka.consumer;
+package app.com.kafka.consumer;
 
 /*
  * Kafka Consumer
@@ -30,13 +30,12 @@ import com.ibm.mq.MQException;
 import com.ibm.mq.constants.MQConstants;
 import com.ibm.mq.headers.MQDataException;
 
+import app.com.kafka.AoKafkaToMqApplication;
+import app.com.kafka.constants.MQKafkaConstants;
+import app.com.kafka.mq.MQConnection;
+import app.com.kafka.mq.MQProducer;
 import io.micrometer.core.instrument.Metrics;
 import io.micrometer.core.instrument.Tags;
-import maersk.com.kafka.AoKafkaToMqApplication;
-import maersk.com.kafka.constants.MQKafkaConstants;
-//import maersk.com.kafka.constants.MQKafkaConstants.MQKafka;
-import maersk.com.kafka.mq.MQConnection;
-import maersk.com.kafka.mq.MQProducer;
 
 @Component
 public class KafkaConsumer {

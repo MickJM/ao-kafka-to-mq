@@ -1,4 +1,4 @@
-package maersk.com.kafka;
+package app.com.kafka;
 
 /*
  * Run the 'Kafka to MQ' API

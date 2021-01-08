@@ -1,4 +1,4 @@
-package maersk.com.kafka.mq;
+package app.com.kafka.mq;
 
 /*
  * Write messages to a queue manager 
@@ -32,7 +32,7 @@ import com.ibm.mq.constants.MQConstants;
 import com.ibm.mq.headers.MQDataException;
 import com.ibm.mq.headers.MQRFH2;
 
-import maersk.com.kafka.constants.MQKafkaConstants;
+import app.com.kafka.constants.MQKafkaConstants;
 
 @Component
 @DependsOn("queuemanager")

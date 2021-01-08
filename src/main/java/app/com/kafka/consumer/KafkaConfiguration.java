@@ -1,4 +1,4 @@
-package maersk.com.kafka.consumer;
+package app.com.kafka.consumer;
 
 /*
  * Kafka Configuration
